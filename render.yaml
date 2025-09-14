@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: file-board
+    env: python
+    pythonVersion: 3.11.9
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 4 --bind 0.0.0.0:$PORT app:socketio
+    plan: free
+    disk:
+      name: uploads
+      mountPath: /app/Uploads
+      sizeGB: 10
+    envVars:
+      - key: SECRET_KEY
+        sync: false
+      - key: ADMIN_USER
+        value: admin
+      - key: ADMIN_PASS
+        sync: false
