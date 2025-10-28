@@ -49,5 +49,3 @@ A Flask-based public file board for uploading, sharing, and managing files with 
 - Files >10 minutes old auto-delete unless permanent
 - Max file size: 1GB
 
-## License
-MIT
