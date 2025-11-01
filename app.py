@@ -21,7 +21,8 @@ from flask_moment import Moment
 load_dotenv()
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = '/app/Uploads'
+
+app.config['UPLOAD_FOLDER'] = 'Uploads'
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'super-secret-key')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///files.db')
@@ -33,6 +34,8 @@ socketio = SocketIO(app, async_mode='gevent')
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logger.info(f"SECRET_KEY loaded: {'*****' if app.config['SECRET_KEY'] else 'Not Set (using default)'}")
+logger.info(f"DATABASE_URL loaded: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -56,22 +59,27 @@ class File(db.Model):
         return f'<File {self.filename}>'
 
 def delete_expired_files():
-    ten_minutes_ago = datetime.now() - timedelta(minutes=15)
-    expired_files = File.query.filter(File.upload_time < ten_minutes_ago.isoformat(), File.is_permanent == 0).all()
-    for file_obj in expired_files:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_obj.id)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        db.session.delete(file_obj)
-        db.session.commit() # Commit deletion before emitting to ensure consistency
-        socketio.emit('file_deleted', {'id': file_obj.id})
+    with app.app_context():
+        ten_minutes_ago = datetime.now() - timedelta(minutes=15)
+        expired_files = File.query.filter(File.upload_time < ten_minutes_ago.isoformat(), File.is_permanent == 0).all()
+        for file_obj in expired_files:
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_obj.id)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            db.session.delete(file_obj)
+            db.session.commit() # Commit deletion before emitting to ensure consistency
+            socketio.emit('file_deleted', {'id': file_obj.id})
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(delete_expired_files, 'interval', minutes=1)
 scheduler.start()
 
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        logger.info("Database tables created successfully.")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}", exc_info=True)
 
 class UploadForm(FlaskForm):
     file = FileField('File')
@@ -227,6 +235,16 @@ def admin_manage():
             flash('File marked as permanent')
             logger.info(f'Admin marked file as permanent: {file_obj.filename} ({file_id})')
     return redirect(url_for('admin_panel'))
+
+@app.route('/health')
+def health_check():
+    try:
+        # Attempt to query the database to check connection
+        db.session.query(File).first()
+        return "OK", 200
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return "Error", 500
 
 if __name__ == '__main__':
     socketio.run(app, debug=True)
