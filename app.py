@@ -21,8 +21,7 @@ from flask_moment import Moment
 load_dotenv()
 
 app = Flask(__name__)
-
-app.config['UPLOAD_FOLDER'] = 'Uploads'
+app.config['UPLOAD_FOLDER'] = '/app/Uploads'
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'super-secret-key')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///files.db')
