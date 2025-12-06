@@ -81,7 +81,6 @@ with app.app_context():
         logger.error(f"Error creating database tables: {e}", exc_info=True)
 
 class UploadForm(FlaskForm):
-    file = FileField('File')
     submit = SubmitField('Upload')
 
 class AdminLoginForm(FlaskForm):
@@ -123,41 +122,50 @@ def index():
 @app.route('/upload', methods=['POST'])
 @limiter.limit("5 per minute")
 def upload_file():
-    form = UploadForm()
-    if not form.validate_on_submit():
-        logger.warning('Invalid form submission for file upload.')
-        flash('Invalid form submission')
+    if 'files[]' not in request.files:
+        logger.warning('No files part in the request.')
+        flash('No files selected')
         return redirect(url_for('index'))
     
-    file = form.file.data
-    if not file:
-        logger.warning('No file selected for upload.')
+    files = request.files.getlist('files[]')
+    if not files or all(f.filename == '' for f in files):
+        logger.warning('No selected file for upload.')
         flash('No file selected')
         return redirect(url_for('index'))
-    
+
     MIN_FREE_SPACE_GB = int(os.getenv('MIN_FREE_SPACE_GB', 2)) # Default to 2 GB
     total, used, free = shutil.disk_usage(app.config['UPLOAD_FOLDER'])
     if free < MIN_FREE_SPACE_GB * 1024 * 1024 * 1024:
         logger.error(f'Server storage low. Free space: {free / (1024**3):.2f} GB. Required: {MIN_FREE_SPACE_GB} GB.')
         flash(f'Server storage low. Please try again later. Minimum free space required: {MIN_FREE_SPACE_GB} GB.')
         return redirect(url_for('index'))
-    
-    file_id = str(uuid.uuid4())
-    filename = secure_filename(file.filename)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_id)
-    try:
-        file.save(file_path)
-        upload_time = datetime.now().isoformat()
-        new_file = File(id=file_id, filename=filename, upload_time=upload_time, is_permanent=0)
-        db.session.add(new_file)
-        db.session.commit()
+
+    uploaded_count = 0
+    for file in files:
+        if file.filename == '':
+            continue
         
-        socketio.emit('new_file', {'id': file_id, 'filename': filename, 'upload_time': upload_time})
-        logger.info(f'File {filename} ({file_id}) uploaded successfully.')
-        flash('File uploaded successfully')
-    except Exception as e:
-        logger.error(f'Error uploading file {filename} ({file_id}): {e}')
-        flash('Error uploading file. Please try again.')
+        file_id = str(uuid.uuid4())
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_id)
+        try:
+            file.save(file_path)
+            upload_time = datetime.now().isoformat()
+            new_file = File(id=file_id, filename=filename, upload_time=upload_time, is_permanent=0)
+            db.session.add(new_file)
+            db.session.commit()
+            
+            socketio.emit('new_file', {'id': file_id, 'filename': filename, 'upload_time': upload_time})
+            logger.info(f'File {filename} ({file_id}) uploaded successfully.')
+            uploaded_count += 1
+        except Exception as e:
+            logger.error(f'Error uploading file {filename} ({file_id}): {e}')
+            flash(f'Error uploading {filename}. Please try again.')
+    
+    if uploaded_count > 0:
+        flash(f'{uploaded_count} file(s) uploaded successfully')
+    else:
+        flash('No files were uploaded.')
     
     return redirect(url_for('index'))
 
