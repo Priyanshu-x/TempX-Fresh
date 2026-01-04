@@ -9,11 +9,13 @@ from wtforms import FileField, SubmitField, StringField, PasswordField
 from wtforms.validators import DataRequired, Length
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.security import generate_password_hash, check_password_hash
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask_httpauth import HTTPBasicAuth
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_socketio import SocketIO, emit
+from flask_wtf.csrf import CSRFProtect
 from dotenv import load_dotenv
 from flask_sqlalchemy import SQLAlchemy
 from flask_moment import Moment
@@ -28,7 +30,10 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///fil
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 moment = Moment(app)
-socketio = SocketIO(app, async_mode='gevent')
+csrf = CSRFProtect(app)
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
+login_manager = LoginManager(app)
+login_manager.login_view = 'admin_login'
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -38,15 +43,21 @@ logger.info(f"DATABASE_URL loaded: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-auth = HTTPBasicAuth()
 ADMIN_USER = os.getenv('ADMIN_USER', 'admin')
 ADMIN_PASS = os.getenv('ADMIN_PASS', 'admin123')
 
-limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
+limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"], storage_uri="redis://redis:6379" if os.getenv('REDIS_URL') else "memory://")
 
-@auth.verify_password
-def verify_password(username, password):
-    return username == ADMIN_USER and password == ADMIN_PASS
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
 class File(db.Model):
     id = db.Column(db.String, primary_key=True)
@@ -56,6 +67,10 @@ class File(db.Model):
 
     def __repr__(self):
         return f'<File {self.filename}>'
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
 def delete_expired_files():
     with app.app_context():
@@ -76,9 +91,16 @@ scheduler.start()
 with app.app_context():
     try:
         db.create_all()
+        # Create Admin User
+        if not User.query.filter_by(username=ADMIN_USER).first():
+            admin = User(username=ADMIN_USER)
+            admin.set_password(ADMIN_PASS)
+            db.session.add(admin)
+            db.session.commit()
+            logger.info(f"Admin user '{ADMIN_USER}' created/verified.")
         logger.info("Database tables created successfully.")
     except Exception as e:
-        logger.error(f"Error creating database tables: {e}", exc_info=True)
+        logger.error(f"Error creating database tables or admin user: {e}", exc_info=True)
 
 class UploadForm(FlaskForm):
     submit = SubmitField('Upload')
@@ -193,7 +215,7 @@ def download_file(file_id):
     return send_file(file_path, as_attachment=True, download_name=filename)
 
 @app.route('/admin', methods=['GET'])
-@auth.login_required
+@login_required
 def admin_panel():
     files = File.query.all()
     # Convert upload_time strings to datetime objects for Flask-Moment
@@ -208,19 +230,29 @@ def admin_panel():
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
+    if current_user.is_authenticated:
+        return redirect(url_for('admin_panel'))
     form = AdminLoginForm()
     if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        if username == ADMIN_USER and password == ADMIN_PASS:
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and user.check_password(form.password.data):
+            login_user(user)
             flash('Logged in successfully.', 'success')
-            return redirect(url_for('admin_panel'))
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('admin_panel'))
         else:
             flash('Invalid username or password.', 'danger')
     return render_template('admin_login.html', form=form)
 
+@app.route('/admin/logout')
+@login_required
+def admin_logout():
+    logout_user()
+    flash('Logged out successfully.')
+    return redirect(url_for('admin_login'))
+
 @app.route('/admin/manage', methods=['POST'])
-@auth.login_required
+@login_required
 def admin_manage():
     file_id = request.form.get('file_id')
     action = request.form.get('action')

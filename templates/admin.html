@@ -40,6 +40,7 @@
                         <td>
                             <form method="post" action="{{ url_for('admin_manage') }}" style="display:inline;">
                                 <input type="hidden" name="file_id" value="{{ file.id }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                                 <button type="submit" name="action" value="delete" class="btn btn-sm btn-danger">Delete</button>
                                 {% if not file.is_permanent %}
                                     <button type="submit" name="action" value="make_permanent" class="btn btn-sm btn-primary">Make Permanent</button>

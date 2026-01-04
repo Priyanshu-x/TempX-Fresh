@@ -90,8 +90,28 @@
         socket.on('new_file', function(file) {
             const table = document.querySelector('#fileTable tbody');
             const uploadTime = moment(file.upload_time).format('YYYY-MM-DD HH:mm:ss');
-            const row = `<tr data-file-id="${file.id}"><td>${file.filename.replace(/</g, '<')}</td><td>${uploadTime}</td><td><a href="/download/${file.id}" class="btn btn-sm btn-success">Download</a></td></tr>`;
-            table.insertAdjacentHTML('beforeend', row);
+            
+            const tr = document.createElement('tr');
+            tr.setAttribute('data-file-id', file.id);
+            
+            const tdName = document.createElement('td');
+            tdName.innerText = file.filename;
+            
+            const tdTime = document.createElement('td');
+            tdTime.innerText = uploadTime;
+            
+            const tdAction = document.createElement('td');
+            const link = document.createElement('a');
+            link.href = `/download/${file.id}`;
+            link.className = 'btn btn-sm btn-success';
+            link.innerText = 'Download';
+            tdAction.appendChild(link);
+            
+            tr.appendChild(tdName);
+            tr.appendChild(tdTime);
+            tr.appendChild(tdAction);
+            
+            table.appendChild(tr);
         });
         socket.on('file_deleted', function(data) {
             const row = document.querySelector(`tr[data-file-id="${data.id}"]`);
